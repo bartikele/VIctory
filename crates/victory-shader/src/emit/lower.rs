@@ -3165,14 +3165,20 @@ impl<'a> Lower<'a> {
             return Ok(());
         }
         if let Some(rest) = name.strip_prefix("ds_write") {
-            if let Some(bits) = match rest {
-                "_b8" => Some(8u32),
-                "_b16" => Some(16),
+            if let Some((bits, hi)) = match rest {
+                "_b8" => Some((8u32, false)),
+                "_b16" => Some((16, false)),
+                "_b8_d16_hi" => Some((8, true)),
+                "_b16_d16_hi" => Some((16, true)),
                 _ => None,
             } {
-                let val = self.vgprs(inst, data.first().ok_or("an LDS write")?, 1)?[0];
+                let mut val = self.vgprs(inst, data.first().ok_or("an LDS write")?, 1)?[0];
                 let p = dword(self, offset);
                 let c = self.cur;
+                if hi {
+                    let k16 = self.s.m.i32(16);
+                    val = self.s.m.bin(c, Bin::LShr, val, k16);
+                }
                 let off_val = self.s.m.i32(offset);
                 let at = self.s.m.bin(c, Bin::Add, a, off_val);
                 let three = self.s.m.i32(3);
@@ -10804,6 +10810,8 @@ mod tests {
         let mut words = Vec::new();
         words.extend(ds(0x01e, 0, 1, 0)); // ds_write_b8 v0, v1
         words.extend(ds(0x01f, 0, 1, 0)); // ds_write_b16 v0, v1
+        words.extend(ds(0x0a0, 0, 1, 0)); // ds_write_b8_d16_hi v0, v1
+        words.extend(ds(0x0a1, 0, 1, 0)); // ds_write_b16_d16_hi v0, v1
         words.extend(ds(0x039, 0, 0, 2)); // ds_read_i8 v2, v0
         words.extend(ds(0x03a, 0, 0, 3)); // ds_read_u8 v3, v0
         words.extend(ds(0x03b, 0, 0, 4)); // ds_read_i16 v4, v0
