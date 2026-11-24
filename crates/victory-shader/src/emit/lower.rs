@@ -3075,11 +3075,17 @@ impl<'a> Lower<'a> {
             ]
         };
         if let Some(rest) = name.strip_prefix("ds_read") {
-            if let Some((bits, signed)) = match rest {
-                "_u8" => Some((8u32, false)),
-                "_i8" => Some((8, true)),
-                "_u16" => Some((16, false)),
-                "_i16" => Some((16, true)),
+            if let Some((bits, signed, d16, hi)) = match rest {
+                "_u8" => Some((8u32, false, false, false)),
+                "_i8" => Some((8, true, false, false)),
+                "_u16" => Some((16, false, false, false)),
+                "_i16" => Some((16, true, false, false)),
+                "_u8_d16" => Some((8, false, true, false)),
+                "_i8_d16" => Some((8, true, true, false)),
+                "_u16_d16" => Some((16, false, true, false)),
+                "_u8_d16_hi" => Some((8, false, true, true)),
+                "_i8_d16_hi" => Some((8, true, true, true)),
+                "_u16_d16_hi" => Some((16, false, true, true)),
                 _ => None,
             } {
                 let reg = dst_reg.ok_or("an LDS read result")?;
@@ -3092,16 +3098,33 @@ impl<'a> Lower<'a> {
                 let byte_in_dword = self.s.m.bin(c, Bin::And, at, three);
                 let k3 = self.s.m.i32(3);
                 let shift = self.s.m.bin(c, Bin::Shl, byte_in_dword, k3);
-                let r = if signed {
+                let mut r = if signed {
                     let top = self.s.m.i32(32 - bits);
                     let up = self.s.m.bin(c, Bin::Sub, top, shift);
                     let x = self.s.m.bin(c, Bin::Shl, x, up);
-                    self.s.m.bin(c, Bin::AShr, x, top)
+                    let sx = self.s.m.bin(c, Bin::AShr, x, top);
+                    if d16 {
+                        let m16 = self.s.m.i32(0xFFFF);
+                        self.s.m.bin(c, Bin::And, sx, m16)
+                    } else {
+                        sx
+                    }
                 } else {
                     let mask = self.s.m.i32((1u32 << bits) - 1);
                     let x = self.s.m.bin(c, Bin::LShr, x, shift);
                     self.s.m.bin(c, Bin::And, x, mask)
                 };
+                if hi {
+                    let old = match inst.read(Reg::V(reg)) {
+                        Some(v) => self.i32_of(v)?,
+                        None => self.s.m.i32(0),
+                    };
+                    let m16 = self.s.m.i32(0xFFFF);
+                    let lo = self.s.m.bin(c, Bin::And, old, m16);
+                    let k16 = self.s.m.i32(16);
+                    let shifted = self.s.m.bin(c, Bin::Shl, r, k16);
+                    r = self.s.m.bin(c, Bin::Or, lo, shifted);
+                }
                 self.write(inst, Reg::V(reg), r, guard);
                 return Ok(());
             }
@@ -10816,6 +10839,12 @@ mod tests {
         words.extend(ds(0x03a, 0, 0, 3)); // ds_read_u8 v3, v0
         words.extend(ds(0x03b, 0, 0, 4)); // ds_read_i16 v4, v0
         words.extend(ds(0x03c, 0, 0, 5)); // ds_read_u16 v5, v0
+        words.extend(ds(0x0a2, 0, 0, 6)); // ds_read_u8_d16 v6, v0
+        words.extend(ds(0x0a3, 0, 0, 6)); // ds_read_u8_d16_hi v6, v0
+        words.extend(ds(0x0a4, 0, 0, 7)); // ds_read_i8_d16 v7, v0
+        words.extend(ds(0x0a5, 0, 0, 7)); // ds_read_i8_d16_hi v7, v0
+        words.extend(ds(0x0a6, 0, 0, 8)); // ds_read_u16_d16 v8, v0
+        words.extend(ds(0x0a7, 0, 0, 8)); // ds_read_u16_d16_hi v8, v0
         words.push(S_ENDPGM);
         lowers(&words, 1 << 15).expect("LDS byte and half read/write should lower");
     }
