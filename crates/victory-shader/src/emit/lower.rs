@@ -3219,10 +3219,22 @@ impl<'a> Lower<'a> {
                 let all_ones = self.s.m.i32(u32::MAX);
                 let clear = self.s.m.bin(c, Bin::Xor, placed_mask, all_ones);
                 let at = self.begin_guarded(guard);
+                let entry = self.cur;
+                let init = self.s.m.load(entry, p);
+                let head = self.s.m.new_block();
+                let done = self.s.m.new_block();
+                self.s.m.terminate(entry, super::bitcode::Term::Br(head));
+                let i32t = self.s.t.i32;
+                let cur_val = self.s.m.phi(head, i32t);
+                let cleared = self.s.m.bin(head, Bin::And, cur_val, clear);
+                let next_val = self.s.m.bin(head, Bin::Or, cleared, v);
+                let old = self.s.m.cmpxchg(head, p, cur_val, next_val);
+                let ok = self.s.m.cmp(head, pred::EQ, old, cur_val);
                 self.s
                     .m
-                    .atomic(self.cur, super::bitcode::Rmw::And, p, clear);
-                self.s.m.atomic(self.cur, super::bitcode::Rmw::Or, p, v);
+                    .terminate(head, super::bitcode::Term::CondBr(ok, done, head));
+                self.s.m.set_phi(cur_val, vec![(init, entry), (old, head)]);
+                self.cur = done;
                 self.end_guarded(at, &[]);
                 return Ok(());
             }
